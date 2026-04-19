@@ -113,4 +113,9 @@ ORDER BY alert_count DESC;
 - **PySpark advanced** —— window functions for velocity feature engineering, schema enforcement, Iceberg writes
 - **Snowflake** —— star schema DD, external stage, COPY INTO, analytical views
 - **Data serialization** —— AVRO (ingestion), Parquet + Iceberg (curated layer)
-- **Processing methodologies** —— 
+- **Processing methodologies** —— micro-batch (Kafka consumer) + batch (PySpark hourly job)
+- **Data modeling** —— Kimball star schema with surrogate keys and SCD-ready dimensions
+- **Data quality** —— Great Expectations checkpoint suite
+- **CI/CD** —— Github Actions lint + test pipeline
+- **Unix scripting** —— Shell orchestration for end-to-end pipeline execution
+- **NoSQL understanding** —— Kafka as distributed event log (documented in architecture)
