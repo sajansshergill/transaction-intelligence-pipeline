@@ -8,68 +8,7 @@ This project simulates a production-grade payment data platfrom modeled after th
 **Core focus areas:** Kafka + S3 intergration, PySpark batch processing, Kimball dimensional modeling in Snowflake, data quality enforcement, CI/CD with Github Actions.
 
 ## Architecture
-┌─────────────────────────────────────────────────────────────────┐
-│                    INGESTION LAYER                              │
-│                                                                 │
-│   Kafka Producer (Faker)  ──►  Kafka Topic: raw_transactions    │
-│         [AVRO Schema + Schema Registry]                         │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    LANDING LAYER (S3)                           │
-│                                                                 │
-│   Kafka Consumer  ──►  s3://bucket/raw/transactions/            │
-│                         Partitioned by date/hour                │
-│                         Format: AVRO                            │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    PROCESSING LAYER (PySpark)                   │
-│                                                                 │
-│   ┌─────────────────────────────────────────────────────┐       │
-│   │  Schema Validation  →  Null/Type Checks             │       │
-│   │  Great Expectations data quality suite              │       │
-│   │  Fraud Velocity Features:                           │       │
-│   │    - txn_count_last_1h per customer                 │       │
-│   │    - spend_velocity_last_24h per merchant           │       │
-│   │    - cross_merchant_flag (card used at 5+ merchants)│       │
-│   │  Merchant Category Enrichment (lookup join)         │       │
-│   └──────────────────────┬──────────────────────────────┘       │
-│                          │                                      │
-│                          ▼                                      │
-│   s3://bucket/curated/transactions/                             │
-│   Format: Parquet (Iceberg table format)                        │
-│   Partitioned by: year / month / day                            │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    SERVING LAYER (Snowflake)                    │
-│                                                                 │
-│   COPY INTO  ──►  Kimball Star Schema                           │
-│                                                                 │
-│   fact_transactions                                             │
-│     ├── dim_customer                                            │
-│     ├── dim_merchant                                            │
-│     ├── dim_date                                                │
-│     └── dim_fraud_signal                                        │
-│                                                                 │
-│   Analytical Views:                                             │
-│     - merchant_daily_performance_v                              │
-│     - fraud_velocity_alerts_v                                   │
-│     - customer_spend_profile_v                                  │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    VISUALIZATION (Streamlit)                    │
-│                                                                 │
-│   • Merchant Performance Dashboard                              │
-│   • Fraud Velocity Monitor (real-time alerts)                   │
-│   • Pipeline Health & Data Quality Scorecard                    │
-└─────────────────────────────────────────────────────────────────┘
+<img width="780" height="1248" alt="image" src="https://github.com/user-attachments/assets/2ac1a32f-0270-4761-8d38-2bef318d2e76" />
 
 ## Repository Structure
 <img width="376" height="605" alt="image" src="https://github.com/user-attachments/assets/570b6b02-37d0-4a58-a36b-cca38e890b92" />
@@ -142,9 +81,36 @@ See .github/workflows/ci.yml.
 **Top 10 merchants by revenue —— last 30 days**
 
 SELECT
-  dm.merchant_name,
-  dm.merchant_category,
-  SUM(ft.amount_usd) AS total_revenue,
-  COUNT(ft.transaction_id) AS txn_count
+    dm.merchant_name,
+    dm.merchant_category,
+    SUM(ft.amount_usd)        AS total_revenue,
+    COUNT(ft.transaction_id)  AS txn_count
 FROM fact_transactions ft
-JOIN dim_merchant dm ON ft.merchant_key = 
+JOIN dim_merchant dm ON ft.merchant_key = dm.merchant_key
+JOIN dim_date dd     ON ft.date_key     = dd.date_key
+WHERE dd.full_date >= DATEADD('day', -30, CURRENT_DATE)
+GROUP BY 1, 2
+ORDER BY total_revenue DESC
+LIMIT 10;
+
+**High-velocity fraud signal detection**
+SELECT
+    dc.customer_id,
+    ft.txn_count_last_1h,
+    ft.spend_velocity_24h,
+    ft.cross_merchant_flag,
+    COUNT(*) AS alert_count
+FROM fact_transactions ft
+JOIN dim_customer dc ON ft.customer_key = dc.customer_key
+WHERE ft.txn_count_last_1h > 10
+   OR ft.cross_merchant_flag = TRUE
+   OR ft.spend_velocity_24h > 5000
+GROUP BY 1, 2, 3, 4
+ORDER BY alert_count DESC;
+
+## Skills Demonstrated
+- **Kafka + S3 intergration** —— AVRO-serialized event streaming with micro-batch S3 link
+- **PySpark advanced** —— window functions for velocity feature engineering, schema enforcement, Iceberg writes
+- **Snowflake** —— star schema DD, external stage, COPY INTO, analytical views
+- **Data serialization** —— AVRO (ingestion), Parquet + Iceberg (curated layer)
+- **Processing methodologies** —— 
