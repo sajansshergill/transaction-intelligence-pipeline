@@ -1,85 +1,186 @@
 # Connected Commerce Transaction Intelligence Pipeline
 
-Real-time fraud signal aggregation and merchant analytics -> Kafka -> S3 -> PySpark -> Snowflake -> Streamlit
+Real-time fraud signal aggregation and merchant analytics — Kafka → S3 → PySpark → Snowflake → Streamlit
+
+![Transaction Intelligence Pipeline demo](docs/demo.gif)
 
 ## Overview
-This project simulates a production-grade payment data platfrom modeled after the architecture used by large-scale Connected Commerce teams. It demonstrates the full data engineering lifecycle —— from synthetic transaction event generation through Kafka, to curated Parquet/Iceberg tables on S3, to analytical star schema in Snowflake, surfaced through a real-time Streamlit dashboard.
 
-**Core focus areas:** Kafka + S3 intergration, PySpark batch processing, Kimball dimensional modeling in Snowflake, data quality enforcement, CI/CD with Github Actions.
+This project simulates a production-grade payment data platform modeled
+after the architecture used by large-scale Connected Commerce teams. It
+demonstrates the full data engineering lifecycle — from synthetic
+transaction event generation through Kafka, to curated Parquet/Iceberg
+tables on S3, to an analytical star schema in Snowflake, surfaced through
+a real-time Streamlit dashboard.
+
+**Core focus areas:** Kafka + S3 integration, PySpark batch processing,
+Kimball dimensional modeling in Snowflake, data quality enforcement,
+CI/CD with GitHub Actions.
+
+## The console
+
+The serving layer is an interactive transaction intelligence console:
+
+- **Live sidebar filters** — date range, merchant categories, segments,
+  channels, risk tiers, states, a minimum-amount threshold and a
+  fraud-flagged-only toggle; every chart, table and KPI re-renders
+  instantly.
+- **KPI cards with deltas** — filtered revenue and transaction volume
+  vs. the prior equal-length period, average ticket, high-severity
+  alert count and high-risk share.
+- **Animated charts** — Plotly `animation_frame` views: daily revenue
+  by category and a cumulative revenue race you can play, plus an
+  animated fraud-velocity scatter through time.
+- **3D risk space** — a rotatable `Scatter3d` of every transaction in
+  txn-count (1h) × spend-velocity (24h) × amount space — the exact
+  velocity features computed by the PySpark enrichment job — and a
+  category × date **revenue surface terrain** (drag to orbit, scroll
+  to zoom).
+- **Fraud velocity monitor** — alert-score distribution, a
+  category × risk-tier signal heatmap, the velocity scatter and a live
+  alert feed, all driven by the same flags as
+  `fraud_velocity_alerts_v` (high velocity, cross-merchant,
+  international, high risk tier).
+- **Merchant, customer & pipeline views** — revenue by category and
+  segment, daily trends, top-20 merchants, RFM-style customer spend
+  profiles, and pipeline health with stage status for every hop from
+  Kafka producer to this dashboard.
+- **Dark UI** — gradient hero header, glass KPI cards and a custom
+  dark theme (`.streamlit/config.toml` + inline CSS).
+- **Runs standalone** — with no Snowflake credentials configured, the
+  console serves demo data generated from the project's own star
+  schema and PySpark velocity logic (`dashboard/demo_data.py`):
+  risk tiers at the `enrich.py` thresholds ($1k / $5k spend velocity),
+  `high_velocity_flag` at 10+ transactions in an hour,
+  `cross_merchant_flag` at 5+ distinct merchants in an hour, and
+  customer spend segments at the view's lifetime thresholds. Set
+  `SNOWFLAKE_ACCOUNT` / `SNOWFLAKE_USER` / `SNOWFLAKE_PASSWORD` and the
+  same console queries the live Snowflake views instead.
 
 ## Architecture
-<img width="780" height="1248" alt="image" src="https://github.com/user-attachments/assets/2ac1a32f-0270-4761-8d38-2bef318d2e76" />
 
-## Repository Structure
-<img width="376" height="605" alt="image" src="https://github.com/user-attachments/assets/570b6b02-37d0-4a58-a36b-cca38e890b92" />
+```
+Kafka Producer → Kafka Topic → S3 Raw (AVRO) → PySpark Validate →
+PySpark Enrich → S3 Curated (Iceberg) → Snowflake Star Schema → Streamlit
+```
 
-<img width="376" height="402" alt="image" src="https://github.com/user-attachments/assets/2dd023a9-128a-480b-9901-9a4e1b914d24" />
+**Data model — Kimball star schema**
 
-## Tech Stack
-<img width="347" height="300" alt="image" src="https://github.com/user-attachments/assets/6d895779-4e38-405d-9265-10d110a2e6c0" />
+- `fact_transactions` — amount, velocity measures
+  (`txn_count_last_1h`, `distinct_merchants_1h`, `spend_velocity_24h`),
+  channel, event time; clustered on `(ingest_date, merchant_key)`.
+- `dim_merchant` — merchant, category, segment (everyday spend,
+  discretionary, travel, healthcare & wellness, recurring, cash access),
+  city/state.
+- `dim_customer` — customer, account type, risk tier.
+- `dim_fraud_signal` — conformed flag combinations: cross-merchant,
+  international, high-velocity, risk tier, signal label.
+- `dim_date` — calendar spine, 2020–2030.
 
-**Data Model —— Kimball Star Schema**
-fact_transactions
-<img width="372" height="269" alt="image" src="https://github.com/user-attachments/assets/71664123-88e7-44f9-af36-fbf1a839e5e5" />
+Analytical views: `merchant_daily_performance_v` (daily revenue, rolling
+7d revenue, day-over-day delta), `fraud_velocity_alerts_v` (one row per
+flagged transaction with alert severity), `customer_spend_profile_v`
+(lifetime spend, recency/frequency, platinum/gold/silver/bronze segment).
 
-dim_merchant
-<img width="332" height="173" alt="image" src="https://github.com/user-attachments/assets/deaa758a-9386-42c1-9d28-3d607c276618" />
+## Key engineering decisions
 
-dim_customer
-<img width="320" height="156" alt="image" src="https://github.com/user-attachments/assets/883db6f1-2bcb-4768-96c2-800f1d9da50e" />
+**Why AVRO for raw, Parquet/Iceberg for curated?** AVRO is
+schema-enforced and compact for high-throughput Kafka streaming;
+Parquet with Iceberg gives columnar compression, time-travel, and
+schema evolution for batch analytics — aligning with how production
+lakehouse pipelines are structured.
 
-## Key Engineering Decisions
-**Why AVRO for raw, Parquet/Iceberg for curated?** AVRO is schema-enforced and compact for high-throughput Kafka streaming, Parquet with Iceberg gives columnar compression, time-travel, and schema evolution for batch analytics —— aligning with how production lakehouse pipelines are structured.
+**Why Kimball star schema in Snowflake?** Analytics teams query for
+business-level aggregations (merchant performance, customer spend
+trends). A denormalized star schema minimizes join complexity and plays
+to Snowflake's columnar execution engine.
 
-**Why Kimball star schema in Snowflake?** JPMC's analytics teams query for business-level aggregations (merchnat performance, customer spend trends). A denormalized star schema minimizes join complexity and plays to Snowflake's columnar execution engine. 
+**Velocity features in PySpark — not SQL.** Computing
+`txn_count_last_1h` and `spend_velocity_24h` as window functions at the
+PySpark layer (before load) keeps Snowflake serving analytical reads
+only. The PySpark job uses
+`Window.partitionBy("customer_id").orderBy("event_time").rangeBetween(-3600, 0)`.
 
-**Velocity features in PySpark —— not SQL** Computing txn_count_last_1h and spend_velocity_24h as window functions at the PySpark layer (before load) keeps Snowflake serving analytical reads only. The PySpark job uses Window.partitionBy("customer_id").orderBy("event_time").rangeBetween(-3600, 0).
+**Micro-batch vs. batch.** The Kafka consumer runs as a micro-batch
+(5-minute flush to S3), while the PySpark enrichment job runs as a
+scheduled hourly batch via `run_pipeline.sh`.
 
-**Micro-batch vs. batch** The Kafka consumer runs as a micro-batch (5-minyte flush to S3), while the PySpark enrichment job runs as a scheduled hourly batch via run_pipeline.sh. 
+## Tech stack
 
-## Setup & Run
-**Prerequisites**
-- Docker + Docker Compose
-- Python 3.11+
-- AWS credentials configured (~/.aws/credentials)
-- Snowflake account + warehouse
+Python 3.11+ · Kafka · PySpark · Snowflake · Apache Iceberg · AVRO ·
+Parquet · Streamlit · Plotly · pandas · Great Expectations ·
+GitHub Actions · Docker
 
-### 1. Start Kafka locally
-bashdocker-compose up -d
+## Repository structure
+
+```
+transaction-intelligence-pipeline/
+├── dashboard/
+│   ├── app.py                  # Streamlit + Plotly console
+│   ├── demo_data.py            # standalone data from the project schemas
+│   └── snowflake_connector.py  # Snowflake views / demo-mode data access
+├── ingestion/
+│   └── producer.py             # Kafka transaction event producer
+├── processing/
+│   ├── jobs/                   # validate, enrich (velocity features), Iceberg write
+│   └── utils/                  # Spark session helpers
+├── warehouse/
+│   ├── ddl/                    # star schema: fact + dimensions
+│   ├── load/                   # COPY INTO
+│   └── views/                  # merchant / fraud / customer analytical views
+├── tests/                      # enrichment + validation tests
+├── .streamlit/config.toml      # dark console theme
+└── requirements.txt
+```
+
+## Setup & run
+
+**Standalone console (no credentials needed)**
+
+```bash
+pip install -r requirements.txt
+streamlit run dashboard/app.py
+```
+
+**Full pipeline**
+
+Prerequisites: Docker + Docker Compose, Python 3.11+, AWS credentials
+configured (`~/.aws/credentials`), a Snowflake account + warehouse.
+
+```bash
+docker-compose up -d                 # 1. start Kafka locally
 bash scripts/setup_kafka.sh
-
-### 2. Install dependencies
-bashpip install -r requirements.txt
-
-### 3. Bootstrap Snowflake objects
-bashbash scripts/setup_snowflake.sh
-
-### 4. Run end-to-end pipeline
-bashbash scripts/run_pipeline.sh
-This runs: producer → consumer → PySpark validate → enrich → write Iceberg → Snowflake COPY INTO
-
-### 5. Launch dashboard
-bashstreamlit run dashboard/app.py
+pip install -r requirements.txt      # 2. install dependencies
+bash scripts/setup_snowflake.sh      # 3. bootstrap Snowflake objects
+bash scripts/run_pipeline.sh         # 4. producer → consumer → PySpark
+                                     #    validate → enrich → Iceberg → COPY INTO
+streamlit run dashboard/app.py       # 5. launch dashboard (live Snowflake mode
+                                     #    when SNOWFLAKE_ACCOUNT is set)
+```
 
 ### Testing
-bashpytest tests/ -v --tb=short
 
-Tests cover: AVRO schema enforcement, PySpark schema validation logic, velocity feature computation correctness, S3 path partitioning, Snowflake DDL idempotency.
+```bash
+pytest tests/ -v --tb=short
+```
+
+Tests cover: AVRO schema enforcement, PySpark schema validation logic,
+velocity feature computation correctness, S3 path partitioning,
+Snowflake DDL idempotency.
 
 ## CI/CD
+
 GitHub Actions runs on every push to main and every pull request:
-- flake8 linting
-- pytest full test suite
-- Schema compatibility check against AVRO registry mock
+flake8 linting, the pytest suite, and a schema compatibility check
+against an AVRO registry mock. Great Expectations checkpoints gate the
+Silver/curated loads (schema violations, quarantine rate, DLQ counts —
+the same signals surfaced on the console's Pipeline health tab).
 
-See .github/workflows/ci.yml.
+## Sample queries (Snowflake)
 
-**Data Quality Checks (Great Expectations)**
-<img width="510" height="235" alt="image" src="https://github.com/user-attachments/assets/001c0a98-d5d8-4b62-bb9a-cd07b62cd1eb" />
+**Top 10 merchants by revenue — last 30 days**
 
-## Sample Queries (Snowflake)
-**Top 10 merchants by revenue —— last 30 days**
-
+```sql
 SELECT
     dm.merchant_name,
     dm.merchant_category,
@@ -92,8 +193,11 @@ WHERE dd.full_date >= DATEADD('day', -30, CURRENT_DATE)
 GROUP BY 1, 2
 ORDER BY total_revenue DESC
 LIMIT 10;
+```
 
 **High-velocity fraud signal detection**
+
+```sql
 SELECT
     dc.customer_id,
     ft.txn_count_last_1h,
@@ -107,15 +211,16 @@ WHERE ft.txn_count_last_1h > 10
    OR ft.spend_velocity_24h > 5000
 GROUP BY 1, 2, 3, 4
 ORDER BY alert_count DESC;
+```
 
-## Skills Demonstrated
-- **Kafka + S3 intergration** —— AVRO-serialized event streaming with micro-batch S3 link
-- **PySpark advanced** —— window functions for velocity feature engineering, schema enforcement, Iceberg writes
-- **Snowflake** —— star schema DD, external stage, COPY INTO, analytical views
-- **Data serialization** —— AVRO (ingestion), Parquet + Iceberg (curated layer)
-- **Processing methodologies** —— micro-batch (Kafka consumer) + batch (PySpark hourly job)
-- **Data modeling** —— Kimball star schema with surrogate keys and SCD-ready dimensions
-- **Data quality** —— Great Expectations checkpoint suite
-- **CI/CD** —— Github Actions lint + test pipeline
-- **Unix scripting** —— Shell orchestration for end-to-end pipeline execution
-- **NoSQL understanding** —— Kafka as distributed event log (documented in architecture)
+## Skills demonstrated
+
+- **Kafka + S3 integration** — AVRO-serialized event streaming with micro-batch S3 landing
+- **PySpark advanced** — window functions for velocity feature engineering, schema enforcement, Iceberg writes
+- **Snowflake** — star schema DDL, external stage, COPY INTO, analytical views
+- **Data serialization** — AVRO (ingestion), Parquet + Iceberg (curated layer)
+- **Processing methodologies** — micro-batch (Kafka consumer) + batch (PySpark hourly job)
+- **Data modeling** — Kimball star schema with surrogate keys and SCD-ready dimensions
+- **Data quality** — Great Expectations checkpoint suite
+- **CI/CD** — GitHub Actions lint + test pipeline
+- **Unix scripting** — shell orchestration for end-to-end pipeline execution
